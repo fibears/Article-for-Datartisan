@@ -1,0 +1,294 @@
+---
+title: "如何用R绘制地图"
+author: "fibears"
+date: "2015年12月20日"
+output:
+  word_document: default
+  pdf_document:
+    highlight: default
+    includes:
+      in_header: header.tex
+    latex_engine: xelatex
+    number_section: yes
+    toc: yes
+    toc_depth: 2
+---
+
+# 基础地图
+##方法
+从***map()***包里获取地图数据，用***geom_polygon()***（可以用颜色填充）或者***geom_path()***（不能填充）绘制。
+
+```{r}
+#install.packages("ggplot2")
+#install.packages("maps")
+library(ggplot2)
+library(maps) # 为了获取数据
+# 美国地图数据
+states_map <- map_data("state")
+head(states_map)
+# geom_polygon()
+ggplot(states_map, aes(x=long,y=lat,group=group)) +
+    geom_polygon(fill="white",colour="black") +
+    labs(title = "USA Map")
+
+# 中国地图
+library(mapdata)
+map("china", col = "red4", ylim = c(18,54), panel.first = grid())
+title("China Map")
+
+# 世界地图数据
+world_map <- map_data("world")
+head(world_map)
+#sort(unique(world_map$region))
+
+# 绘制指定区域的地图数据
+# 绘制欧洲足球五大联赛所在地 
+euro <- map_data("world", region = c("UK","France", "Spain","Germany", "Italy"))
+ggplot(euro, aes(x=long, y = lat, group=group,fill=region)) +
+    geom_polygon(colour="black") +
+    scale_fill_brewer(palette = "Set2") +
+    scale_y_continuous(limits=c(40,60)) +
+    scale_x_continuous(limits=c(-25,25)) +
+    labs(title = " Euorpe's Big Five Football Leagues")
+```
+
+# 绘制等值区域图
+当我们创建一个地图后，如果根据变量值对不同区域填充不同的颜色呢？
+
+## 方法
+很简单，只要把变量值和地图数据合并在一起，然后把一个变量映射到***fill***上就可以了。
+
+```{r warning=FALSE}
+head(USArrests) # 1973年的数据
+crimes <- data.frame(state= tolower(rownames(USArrests)), USArrests)
+# 合并数据集
+crime_map <- merge(states_map,crimes,by.x="region",by.y = "state")
+# head(crime_map)
+
+library(plyr) # 加载数据清洗软件包
+# 按照 group, order排序
+crime_map <- arrange(crime_map,group,order)
+# head(crime_map)
+
+ggplot(crime_map, aes(x=long,y=lat, group = group, fill = Assault)) + 
+    geom_polygon(colour = "black") +
+    coord_map("polyconic") +
+    labs(title = "USA Map")
+
+# 更改配色
+ggplot(crimes, aes(map_id = state, fill = Assault)) +
+    geom_map(map = states_map, colour = "black") +
+    scale_fill_gradient(low="#FFFFFF", high = "#BB4444") +
+    expand_limits(x = states_map$long, y = states_map$lat) 
+```
+
+对于犯罪率这个指标，从上图可以看出采用连续取值的方法无法很好地反映出信息，这时采用离散取值反而更容易解释。
+
+```{r}    
+# 离散颜色标度
+qa <- quantile(crimes$Assault, c(0,0.2,0.4,0.6,0.8,1.0))
+qa
+# 新增一个分位数类别变量
+crimes$Assault_q <- cut(crimes$Assault, qa, labels = c("0-20%", "20-40%","40-60%",
+                                                       "60-80%", "80-100%"), 
+                        include.lowest = TRUE)
+states <- ddply(states_map, .(region),summarise, lat = mean(lat,na.rm = TRUE), 
+                long = mean(long,na.rm = TRUE))
+crimes <- merge(crimes, states, by.x = "state", by.y = "region")
+
+# 绘制离散分类地图
+p <- ggplot(crimes, aes(map_id = state, fill = Assault_q)) +
+    geom_map(map = states_map, colour = "black") +
+    scale_fill_brewer(palette = "Set2") +
+    expand_limits(x = states_map$long, y =states_map$lat) +
+    coord_map("polyconic") +
+    labs(fill="Assault Rate\nPercentile", title = "USA Map")
+p
+# 加入州名对应的标签
+p + geom_text(aes(x=long,y=lat,label=state),size=3,colour="black") +
+    theme_bw() +
+    xlab("long") + ylab("lat")
+
+# 如果你想去掉网格线和坐标框，那么接着往下翻！
+# 创建空白背景地图
+theme_clean <- function(base_size=12){
+    require(grid)
+    theme_grey(base_size)
+    theme(
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        panel.background = element_blank(),
+        panel.grid = element_blank(),
+        axis.ticks.length = unit(0, "cm"),
+        axis.ticks.margin = unit(0, "cm"),
+        panel.margin = unit(0, "lines"),
+        plot.margin = unit(c(0,0,0,0), "lines"),
+        complete = TRUE
+    )
+}
+p + theme_clean()
+```
+
+
+# 基于空间数据格式（shapefile）创建地图
+ESRI公司的Shapefile文件是描述空间数据的几何和属性特征的矢量数据结构的一种格式。
+一个Shapefile文件最少包括三个文件：主文件(*.shp):存储地理要素的几何图形的文件；
+索引文件(*.shx):存储图形要素与属性信息索引的文件;
+dBASE表文件(*.dbf):存储要素信息属性的dBase表文件。
+
+除此之外还有可选的文件包括：空间参考文件(*.prj),
+几何体的空间索引文件(*.sbn 和 *.sbx),
+只读的Shapefiles的几何体的空间索引文件(*.fbn 和 *.fbx),
+列表中活动字段的属性索引(*.ain 和 *.aih),
+可读写Shapefile文件的地理编码索引(.ixs),
+可读写Shapefile文件的地理编码索引(*.mxs),
+dbf文件的属性索引(*.atx),
+以XML格式保存元数据(*.shp.xml),
+用于描述.dbf文件的代码页,指明其使用的字符编码的描述文件(*.cpg)。
+
+需要注意的是，主文件是一个直接存取，变长记录的文件，其中每个记录描述一个实体的数据，我们称之为称为shape。
+
+下面这个网站中可以下载全球各个国家完整的shapefile格式数据：
+[shapefile数据下载网站](http://www.diva-gis.org/gdata)
+
+***备注：慎用中国地图数据！***
+
+
+## 方法
+利用***maptools()***包中的readShapePoly()载入空间数据文件，用fortify()把数据转化成数据框的格式，然后画图。
+
+
+```{r}
+library(maptools)
+setwd("~/Desktop/dataset/map")
+# 载入空间数据并转化成数据框
+china_shp <- readShapePoly("china/bou2_4p.shp")
+# 返回一个 SpatialPolygonsDataFrame 对象
+# str(china_shp)
+
+china_map <- fortify(china_shp)
+# 绘制中国地图
+p <- ggplot(china_map, aes(x = long, y = lat, group = group)) + 
+    geom_path() +
+    labs(title = "China Map")
+# 绘制空白背景的地图
+p + theme_clean()
+```
+
+这里我们只利用了shapefile中最基本的边界信息，还没有对地理信息数据进行更进一步的分析。我们还可以将不同格式的地理数据整合起来，例如如何在上面的地图上绘制出我国的铁路、水系分布等内容。
+
+
+# 调用百度地图和谷歌地图的数据
+
+接下来，我将介绍如何从百度地图和谷歌地图中获取心仪的地图数据信息。
+
+## 百度地图
+
+```{r}
+library(devtools)
+#install_github("badbye/baidumap")
+library(baidumap)
+
+# 随便输入几个经纬度坐标
+lon = matrix(c(117.93780, 24.55730, 117.93291, 24.57745, 117.23530, 24.64210, 
+               117.05890, 24.74860), byrow=T, ncol=2)
+# 将经纬度坐标转换成真实地理信息
+location = getLocation(lon, formatted = T) 
+location
+
+# 获取厦门大学经纬度坐标，返回json格式文件
+getCoordinate('厦门大学') # json
+ad <- getCoordinate('厦门大学', formatted = TRUE)
+names(ad) <- NULL
+
+# 绘制地图
+# 自己修改了一些参数，并将修改后的package挂在github上，所以我选择从github上安装ggmap包。
+# install_github("fibears/ggmap")
+library(ggmap)
+p <- getBaiduMap("厦门市思明区",zoom = 12)
+ggmap(p) +
+    geom_point(aes(x=ad[1], y =ad[2]))
+```
+
+当当当，奇迹发生了——厦门大学位于海中央！这是因为谷歌地图和百度地图经纬度坐标存在一定的偏差，
+而***getBaiduMap()***软件包的作者利用了***ggmap()***包中坐标转换的思想，这导致最终绘制出来
+的图形不准确。因此，我们还是考虑转入谷歌阵营。
+
+
+## 谷歌地图
+首先介绍一个概念：***火星坐标系统***
+
+火星坐标系统是一种国家保密插件，也叫做加密插件或者加偏或者SM模组，其实就是对真实坐标系统进行人为的加偏处理，按照特殊的算法，将真实的坐标加密成虚假的坐标，而这个加偏并不是线性的加偏，所以各地的偏移情况都会有所不同。而加密后的坐标也常被人称为火星坐标系统。
+
+所有的电子地图、导航设备，都需要加入国家保密插件。第一步，地图公司测绘地图，测绘完成后，送到国家测绘局，将真实坐标的电子地图，加密成“火星坐标”，这样的地图才是可以出版和发布的，然后才可以让GPS公司处理。第二步，所有的GPS公司，只要需要汽车导航的，需要用到导航电子地图的，都需要在软件中加入国家保密算法，将COM口读出来的真实的坐标信号，加密转换成国家要求的保密的坐标。这样，GPS导航仪和导航电子地图就可以完全匹配，GPS也就可以正常工作了。
+
+由于谷歌地图被GFW屏蔽了，所以想调用其API需要翻墙。
+
+主要有以下几个步骤：
+
+- 安装SSLedge
+- 在RStudio中更改proxy
+
+首先，我们先简单认识下http和https：
+
+http是普通超文本协议，其信息室明文传送，而https就是安全超文本传输协议，需要证书和提供安全连接，https是嵌套了SSL加密的http连接，其内容会由SSL先加密，然后再传送。
+
+为了更方便地使用网络，我将只使用https代理，对于Http类型的网站使用直接连接的方式。
+
+```{r eval=FALSE}
+# 查看信息
+Sys.getenv()
+
+# 两种方式设置proxy
+# 利用Sys.setenv()
+Sys.setenv(https_proxy="https://user:password@ip:port")
+# 修改.Renviron 文档
+
+```
+
+接下来我们来看看如何调用谷歌地图的API来绘图。
+
+```{r warning=FALSE}
+# 可以直接在cran中下载package
+# install_github("fibears/ggmap") # 自己修改了部分链接代码，所以我选择从github下载
+# library(ggmap)
+setwd("~/Desktop/dataset/others")
+# 获取坐标及地图数据
+ad1 <- as.numeric(geocode("福建省厦门市思明南路422",source = "google"))
+xmu <- get_map("厦门市思明区",zoom = 13, maptype = "roadmap")
+ggmap(xmu, extent = "normal") +
+    geom_point(aes(x=ad1[1], y =ad1[2]))
+
+```
+
+需要注意的是，利用geocode函数检索经纬度数据时，最好选择使用道路数据，这样可以提高检索的准确率。
+
+最后引入肖凯大神博客中的一个案例：本例是从地震信息网获取最近一周的地震数据，得到其经纬度，然后以散点形式绘制在google地图上，同时也显示地震发生的密度估计。
+
+```{r}
+# 加载扩展包
+# install.packages("animation")
+# install.packages("XML")
+library(ggmap)
+library(animation)
+library(XML)
+
+# 从网页上抓取数据，并进行清理
+webpage <-'http://data.earthquake.cn/datashare/globeEarthquake_csn.html'
+tables <- readHTMLTable(webpage,stringsAsFactors = FALSE)
+raw <- tables[[6]]
+data <- raw[-1,c('V1','V3','V4')]
+names(data) <- c('date','lan','lon')
+data$lan <- as.numeric(data$lan)
+data$lon <- as.numeric(data$lon)
+data$date <- as.Date(data$date,  "%Y-%m-%d")
+
+# 用ggmap包从google读取地图数据，并将之前的数据标注在地图上。
+ggmap(get_googlemap(center = 'china', zoom=4,maptype='terrain'),extent='device') +
+    geom_point(data=data,aes(x=lon,y=lan),colour = 'red',alpha=0.7) +
+    stat_density2d(aes(x=lon,y=lan,fill=..level..,alpha=..level..),
+                   size=2,bins=4,data=data,geom='polygon')+
+                       theme(legend.position = "none")
+
+```
+
