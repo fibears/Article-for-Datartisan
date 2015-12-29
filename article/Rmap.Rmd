@@ -3,7 +3,8 @@ title: "如何用R绘制地图"
 author: "fibears"
 date: "2015年12月20日"
 output:
-  word_document: default
+  html_document:
+    toc: yes
   pdf_document:
     highlight: default
     includes:
@@ -12,6 +13,7 @@ output:
     number_section: yes
     toc: yes
     toc_depth: 2
+  word_document: default
 ---
 
 # 基础地图
